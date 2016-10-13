@@ -222,7 +222,6 @@ Mat getLaplacian(Mat I, int r)
 
 	
 }
-*/
 
 int main(void)
 {
