@@ -361,39 +361,33 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 	//vals=vals(1:len);
 	//row_idx=row_idx(1:len);
 	//col_idx=col_idx(1:len);
+	vals = vals.t();
 	cout<<"vals size:"<<vals.size()<<endl;
 	cout<<"row_idx size:"<<row_idx.size()<<endl;
 	cout<<"col_idx size:"<<col_idx.size()<<endl;
-  
-	MatrixXd Vals=MatrixXd(vals.rows,vals.cols);
-	cv2eigen(vals,Vals);
-
-	MatrixXd Row_idx=MatrixXd(row_idx.rows,row_idx.cols);
-	cv2eigen(row_idx,Row_idx);
-
-	MatrixXd Col_idx=MatrixXd(col_idx.rows,col_idx.cols);
-	cv2eigen(col_idx,Col_idx);
 
 	//L=sparse(row_idx,col_idx,vals,h*w,h*w);
 	//Create a vector of triplets
 	typedef Triplet<double> Trip;	
 	vector<Trip> trp;
 	//Create the triplets
-	trp.push_back(Trip(Row_idx.rows(),Col_idx.rows(),Vals.rows())); // (index, index, value)
-	trp.push_back(Trip(Row_idx.cols(),Col_idx.cols(),Vals.cols()));
+	for (int vectorsize = 0; vectorsize < row_idx.rows; vectorsize++)
+	{
+		trp.push_back(Trip(row_idx.at<double>(vectorsize,0),col_idx.at<double>(vectorsize,0),vals.at<double>(0,vectorsize)));
+	}
 
 	//Assign them to the sparse Eigen matrix
-	int rows_t, cols_t;
-	rows_t = cols_t = h*w;
-	
-	SparseMatrix<double> L(rows_t,cols_t);
-	cout<<"3"<<endl;
+	cout<<h*w<<endl;
+	SparseMatrix<double> L(h*w,h*w);
 	L.setFromTriplets(trp.begin(), trp.end());
-	cout<<"4"<<endl;
+	//cout<<"L"<<L;
+
 	//sumL=sum(L,2);
 
 	//L=spdiags(sumL(:),0,h*w,h*w)-L;
+
 	cout<<"L rows:"<<L.rows()<<"L cols:"<<L.cols()<<endl;
+	
 	return L;	
 }
 
@@ -452,9 +446,6 @@ int main( int argc, const char** argv )
 
     namedWindow( "Display window", WINDOW_AUTOSIZE );// Create a window for display.
     imshow( "Display window", image );                   // Show our image inside it.
-
-	//namedWindow( "Display output", WINDOW_AUTOSIZE );// Create a window for display.
-    //imshow( "Display output", outputbox );                   // Show our image inside it.
 
     waitKey(0);                                          // Wait for a keystroke in the window
     return 0;
