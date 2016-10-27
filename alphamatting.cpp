@@ -4,9 +4,44 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <vector>
+#include <algorithm>
+#include <opencv2/core/eigen.hpp>
 
 using namespace cv;
 using namespace std;
+using namespace Eigen;
+
+//! similar to matlab function A = spdiags(B,d,m,n)
+//! spdiags(B,d,m,n) creates an m-by-n sparse matrix by taking the 
+//! columns of B and placing them along the diagonals specified by d.
+template <class numeric_t> 
+SparseMatrix<numeric_t> spdiags(const Matrix<numeric_t,-1,-1> &B, const VectorXi &d, const int m, const int n) 
+{					
+	typedef Triplet<numeric_t> triplet_t;
+	std::vector<triplet_t> triplets;
+	triplets.reserve(std::min(m,n)*d.size());
+	for (int k = 0; k < d.size(); ++k) 
+	{
+		int diag = d(k);	// get diagonal
+		int i_start = std::max(-diag, 0); // get row of 1st element
+		int i_end = std::min(m, m-diag-(m-n)); // get row of last element
+		int j = -std::min(0, -diag); // get col of 1st element
+		int B_i; // start index i in matrix B
+		if(m < n)
+			B_i = std::max(-diag,0); // m < n
+		else
+			B_i = std::max(0,diag); // m >= n
+
+		for(int i = i_start; i < i_end; ++i, ++j, ++B_i)
+		{
+			triplets.push_back( {i, j,  B(B_i,k)} );
+		}
+	}
+	SparseMatrix<numeric_t> A(m,n);
+	A.setFromTriplets(triplets.begin(), triplets.end());
+	return A;
+}
+
 
 Mat boxfilter(Mat imSrc, int r)
 {
@@ -101,7 +136,7 @@ Mat boxfilter(Mat imSrc, int r)
 }
 
 
-Mat getLaplacian(Mat I, int r)
+SparseMatrix<double> getLaplacian(Mat I, int r)
 {
 	
 	double eps = 0.0000001f;
@@ -118,7 +153,7 @@ Mat getLaplacian(Mat I, int r)
     vector<Mat> channel(3);
 	split(I, channel);
 
-	Mat ch1, ch2,ch3;
+	Mat ch1, ch2, ch3;
 	ch1 = channel[0];  //Blue channel
 	ch2 = channel[1];  //Green channel
 	ch3 = channel[2];  //Red channel
@@ -200,21 +235,28 @@ Mat getLaplacian(Mat I, int r)
 	Mat sigma, meanI;
 	Mat Identity = Mat::eye(3, 3, CV_64FC1);
 	int i =0; int j =0; 
+	int u, v, p, q;
+	Mat winI = Mat::zeros(c, c, CV_64FC3);
+	Mat Ident2 = Mat::eye(9, 9, CV_64FC1);
+    Mat invsigma(3, 3, CV_64FC1);
+	Mat row_idx = Mat::zeros(tlen,1, CV_64FC1);
+	Mat  trans_t= Mat::zeros(wr, wr, CV_64FC1);	
+	Mat col_idx = Mat::zeros(tlen, 1, CV_64FC1);
+	
 
 	for (i=1+r; i<=h-r; i++)	
 	{
 		for (j=1+r; j<=w-r; j++)
 		{
-			cout<<"j:"<<j<<endl;
+			
 			sigma = (Mat_<double>(3,3) << varI_rr.at<double>(i,j), varI_rg.at<double>(i,j), varI_rb.at<double>(i,j), varI_rg.at<double>(i,j), varI_gg.at<double>(i,j), varI_gb.at<double>(i,j), varI_rb.at<double>(i,j), varI_gb.at<double>(i,j), varI_bb.at<double>(i,j));
 			meanI = (Mat_<double>(1,3) << meanI_r.at<double>(i,j), meanI_g.at<double>(i,j), meanI_b.at<double>(i,j));
 			scaleAdd(Identity, eps, sigma, sigma);
 			
-			
 			//win_idx = M_idx(y-r:y+r,x-r:x+r);
 			Mat win_idx = Mat::zeros(3,3, CV_64FC1);
 			
-			int u, v, p, q;
+			//int u, v, p, q;
 			for (u=0, p=i-r; p<(i+r); u++, p++)
 			{
 				for (v=0, q=j-r; q<(j+r); v++, q++)
@@ -222,11 +264,11 @@ Mat getLaplacian(Mat I, int r)
 					win_idx.at<double>(u,v) = M_idx.at<double>(p,q);
 				}			
 			}
-
+		
 			//win_idx=win_idx(:);
 			win_idx = win_idx.reshape(1, win_idx.rows*win_idx.cols);
 			
-			Mat winI = Mat::zeros(c, c, CV_64FC3);
+			//Mat winI = Mat::zeros(c, c, CV_64FC3);
 			
 			//winI=I(y-r:y+r,x-r:x+r,:);
 			for (u=0, p=i-r; p<(i+r); u++, p++)
@@ -252,19 +294,17 @@ Mat getLaplacian(Mat I, int r)
 			}
 			subtract(winI, meani, winI);
 			
-			
 			//tvals=(1+winI*inv(Sigma)*winI')/wr;
 			Mat tvals = Mat::zeros(winI.size(), CV_64FC1);
-			Mat Ident2 = Mat::eye(9, 9, CV_64FC1);
-			Mat invsigma(3, 3, CV_64FC1);
+			//Mat Ident2 = Mat::eye(9, 9, CV_64FC1);
+			//Mat invsigma(3, 3, CV_64FC1);
 			sigma.convertTo(sigma, CV_64FC1);
 			winI.convertTo(winI, CV_64FC1);
 			invert(sigma, invsigma, DECOMP_SVD);
 			tvals=(Ident2+winI*invsigma*winI.t())/wr;
-			
 					
 			//row_idx(1+len:wr^2+len)=reshape(win_idx(:,ones(wr,1)),wr^2,1);
-			Mat  win_idxt= Mat::zeros(wr, wr, CV_64FC1);	
+			Mat  win_idxt= Mat::zeros(wr, wr, CV_64FC1);
 			
 			for( v=0; v<win_idxt.cols; v++)
 			{
@@ -273,23 +313,22 @@ Mat getLaplacian(Mat I, int r)
 					win_idxt.at<double>(v,u) = win_idx.at<double>(v,0);
 				}
 			}
-			
+	
 			win_idxt = win_idxt.reshape(1, wr*wr);
 			
-			Mat row_idx = Mat::zeros(win_idxt.size(), CV_64FC1);
+			//Mat row_idx = Mat::zeros(tlen,1, CV_64FC1);
 
-//---code debugged and it is correct!---//
-			cout<<"found error";
-			for (v=0+len; v < wr*wr+len; v++)
+			for (v=0+len, u=0; v < wr*wr+len; v++, u++)
 			{
-				row_idx.at<double>(v,0) = win_idxt.at<double>(v,0);
+				row_idx.at<double>(v,0) = win_idxt.at<double>(u,0);
 			}
 
 			//t = win_idx';
 			Mat trans = win_idx.t();
 			
+			
 			//col_idx(1+len:wr^2+len)=reshape(t(ones(wr,1),:),wr^2,1);
-			Mat  trans_t= Mat::zeros(wr, wr, CV_64FC1);			
+			//Mat  trans_t= Mat::zeros(wr, wr, CV_64FC1);			
 			for( v=0; v<trans_t.cols; v++)
 			{
 				for( u=0; u<trans_t.rows; u++)
@@ -299,153 +338,77 @@ Mat getLaplacian(Mat I, int r)
 			}
 			trans_t = trans_t.reshape(1, wr*wr);
 
-			Mat col_idx = Mat::zeros(win_idxt.size(), CV_64FC1);
+			//Mat col_idx = Mat::zeros(tlen, 1, CV_64FC1);
 
-			for (v=0+len; v < wr*wr+len; v++)
+			for (v=0+len, u=0; v < wr*wr+len; v++, u++)
 			{
-				col_idx.at<double>(v,0) = trans_t.at<double>(v,0);
+				col_idx.at<double>(v,0) = trans_t.at<double>(u,0);
 			}
 
 			//vals(1+len:wr^2+len)=tvals(:);			
-			tvals = tvals.reshape(1, wr*wr);
-			cout<<"vals size:"<<vals.size()<<"vals type"<<vals.type()<<endl;
-			cout<<"tvals size:"<<tvals.size()<<"tvals type"<<tvals.type()<<endl;
-			
+			tvals = tvals.reshape(1, wr*wr);			
 			for (p=(0+len),q=0; q<tvals.rows; p++,q++)
 			{
 				vals.at<double>(p,0) = tvals.at<double>(q,0);
 			}
 		
 			//len=len+wr^2;
-			len = len + (wr * wr);
-			cout<<len;					
-		}	
-		cout<<"i:"<<i<<"j:"<<j<<endl;
+			len = len + (wr * wr);	
 
+		}
 	}
 
-	return I;	
-}
-
-/*
-void spdiags(Eigen::SparseMatrix<double> A)
-{
-
-    //Extraction of the diagnols before the main diagonal
-   vector<double> vec1; int flag=0;int l=0;
-   int i=0; int j=0; vector<vector<double> > diagD;
-   vector<vector<double> > diagG;  int z=0; int z1=0;
-
-
-   for(int i=0;i<A.rows();i++)
-   {l=i;
-       do
-       {
-           if(A.coeff(l,j)!=0)
-           flag=1;
-
-           vec1.push_back(A.coeff(l,j));
-           l++;j++;
-
-       }while(l<A.rows() && j<A.cols());
-
-       if(flag==1) {diagG.resize(diagG.size()+1);diagG[z]=vec1; z++; }
-       vec1.clear(); l=0;j=0; flag=0; cout<<endl;
-   }
-
-
-   flag=0;z=0; vec1.clear();
+	//vals=vals(1:len);
+	//row_idx=row_idx(1:len);
+	//col_idx=col_idx(1:len);
+	cout<<"vals size:"<<vals.size()<<endl;
+	cout<<"row_idx size:"<<row_idx.size()<<endl;
+	cout<<"col_idx size:"<<col_idx.size()<<endl;
   
-    // Extraction of the diagonals after the main diagonal                                        
-   for(int i=1;i<A.cols();i++)
-   {l=i;
-       do
-       {
-           if(A.coeff(j,l)!=0)
-           flag=1; 
+	MatrixXd Vals=MatrixXd(vals.rows,vals.cols);
+	cv2eigen(vals,Vals);
 
-           vec1.push_back(A.coeff(j,l));
-           l++;j++;
+	MatrixXd Row_idx=MatrixXd(row_idx.rows,row_idx.cols);
+	cv2eigen(row_idx,Row_idx);
 
-       }while(l<A.cols() && j<A.rows());
+	MatrixXd Col_idx=MatrixXd(col_idx.rows,col_idx.cols);
+	cv2eigen(col_idx,Col_idx);
 
-       if(flag==1) {diagD.resize(diagD.size()+1);diagD[z]=vec1; z++;  }
-       vec1.clear(); l=0;j=0; flag=0; cout<<endl;
-   }
-// End extraction of the diagonals
+	//L=sparse(row_idx,col_idx,vals,h*w,h*w);
+	//Create a vector of triplets
+	typedef Triplet<double> Trip;	
+	vector<Trip> trp;
+	//Create the triplets
+	trp.push_back(Trip(Row_idx.rows(),Col_idx.rows(),Vals.rows())); // (index, index, value)
+	trp.push_back(Trip(Row_idx.cols(),Col_idx.cols(),Vals.cols()));
 
-Eigen::VectorXi d = Eigen::VectorXi::Zero(A.rows() + A.cols() - 1);
+	//Assign them to the sparse Eigen matrix
+	int rows_t, cols_t;
+	rows_t = cols_t = h*w;
+	
+	SparseMatrix<double> L(rows_t,cols_t);
+	cout<<"3"<<endl;
+	L.setFromTriplets(trp.begin(), trp.end());
+	cout<<"4"<<endl;
+	//sumL=sum(L,2);
 
-for (int k=0; k < A.outerSize(); ++k) 
-{
-  for (SparseMatrix<double>::InnerIterator it(A,k); it; ++it)
-   {
-    d(it.col() - it.row() + A.rows() - 1) = 1;
-
-   }
+	//L=spdiags(sumL(:),0,h*w,h*w)-L;
+	cout<<"L rows:"<<L.rows()<<"L cols:"<<L.cols()<<endl;
+	return L;	
 }
 
-
-int num_diags = d.sum();
-Eigen::MatrixXd B(std::min(A.cols(), A.rows()), num_diags);
-
-// fill B with diagonals
-Eigen::ArrayXd v;
-int B_col_idx = 0;
-int B_row_sign = A.rows() >= A.cols() ? 1 : -1;
-int indG=diagG.size()-1; int indD=0;
-
-for (int i = 1 - A.rows(); i <=A.cols() - 1; i++)
-{
-  if (d(i + A.rows() - 1))
-  {
-      if(i<1)
-      {   v.resize(diagG[indG].size());
-          for(int i=0;i<diagG[indG].size();i++)
-          {
-                  v(i)=diagG[indG][i];
-          }
-
-          int B_row_start = std::max(0, B_row_sign * i);
-            B.block(B_row_start, B_col_idx, diagG[indG].size(), 1) = v;
-
-          B_col_idx++;
-          indG--;
-      }
-      else
-      {
-         v.resize(diagD[indD].size());
-
-         for(int i=0;i<diagD[indD].size();i++)
-         {
-            v(i)=diagD[indD][i] ;
-         }
-
-          int B_row_start = std::max(0, B_row_sign * i);
-          B.block(B_row_start, B_col_idx, diagD[indD].size(), 1) = v;
-
-          B_col_idx++;
-          indD++;
-      }
-  }
-
-}
-   cout<<B<<endl; //the result of the function
-}//end of the function
-
-*/
 
 int main( int argc, const char** argv )
 {
     Mat image, sparseDmap, outputbox;
 	int r = 1;
-	image = imread("1.jpg", CV_LOAD_IMAGE_UNCHANGED);   // Read original image	
+	image = imread("3.png", CV_LOAD_IMAGE_UNCHANGED);   // Read original image	
     if(! image.data )                              // Check for invalid input
     {
         cout <<  "Could not open or find the image" << endl ;
         return -1;
     }
-	sparseDmap = imread("1_sparse_depth.png", CV_LOAD_IMAGE_UNCHANGED); // Read sparse map
+	sparseDmap = imread("3_sparse_depth.png", CV_LOAD_IMAGE_UNCHANGED); // Read sparse map
 	if(! sparseDmap.data )                              // Check for invalid input
     {
         cout <<  "Could not open or find the image" << endl ;
@@ -454,29 +417,39 @@ int main( int argc, const char** argv )
 	image.convertTo(image, CV_64FC3);
 	sparseDmap.convertTo(sparseDmap, CV_64FC1);
 	double theta = 0.0001f;
+
 	//constsMap=sparseDMap>0.0001;
+	Mat  constsMap= Mat::zeros(sparseDmap.rows, sparseDmap.cols, CV_64FC1);
 	for( int i=0; i<sparseDmap.rows; i++)
 	{
 		for(int j=0; j<sparseDmap.cols; j++)
 		{
 			if(sparseDmap.at<double>(i,j) > theta)
 			{
-				sparseDmap.at<double>(i,j) =1;
+				constsMap.at<double>(i,j) =1;
 			}
 			else
 			{
-				sparseDmap.at<double>(i,j) =0;
+				constsMap.at<double>(i,j) =0;
 			}
 		}
 	}
 	//L=getLaplacian(I,1);
-	const int dims = 2;
-	int size[] = {image.rows*image.cols, image.rows*image.cols};
-	SparseMat Laplace(dims, size, CV_64F);
-	Laplace = getLaplacian(image, r);
+	//const int dims = 2;
+	//int size[] = {image.rows*image.cols, image.rows*image.cols};
+	//SparseMat Laplace(dims, size, CV_64F);
+	SparseMatrix<double>Laplace = getLaplacian(image, r);
 
 	//make a sparse diagonal matrix necessary for matting process
-	//D=spdiags(constsMap(:),0,sizeI,sizeI);
+	//D=spdiags(constsMap(:),0,sizeI,sizeI); 
+	//constsMap = constsMap.reshape(1, 1);
+
+	//Mat A = spdiags(constsMap, 0,image.rows*image.cols, image.rows*image.cols); 
+
+	//x=(L+lambda*D)\(lambda*D*sparseDMap(:)); 
+	//fullDMap=reshape(x,h,w);
+	//f_d=imadjust(fullDMap);
+
     namedWindow( "Display window", WINDOW_AUTOSIZE );// Create a window for display.
     imshow( "Display window", image );                   // Show our image inside it.
 
@@ -486,3 +459,60 @@ int main( int argc, const char** argv )
     waitKey(0);                                          // Wait for a keystroke in the window
     return 0;
 }
+
+
+
+
+/*
+void imadjust(const Mat1b& src, Mat1b& dst, int tol = 1, Vec2i in = Vec2i(0, 255), Vec2i out = Vec2i(0, 255))
+{
+    // src : input CV_8UC1 image
+    // dst : output CV_8UC1 imge
+    // tol : tolerance, from 0 to 100.
+    // in  : src image bounds
+    // out : dst image buonds
+
+    dst = src.clone();
+
+    tol = max(0, min(100, tol));
+
+    if (tol > 0)
+    {
+        // Compute in and out limits
+
+        // Histogram
+        vector<int> hist(256, 0);
+        for (int r = 0; r < src.rows; ++r) {
+            for (int c = 0; c < src.cols; ++c) {
+                hist[src(r,c)]++;
+            }
+        }
+
+        // Cumulative histogram
+        vector<int> cum = hist;
+        for (int i = 1; i < hist.size(); ++i) {
+            cum[i] = cum[i - 1] + hist[i];
+        }
+
+        // Compute bounds
+        int total = src.rows * src.cols;
+        int low_bound = total * tol / 100;
+        int upp_bound = total * (100-tol) / 100;
+        in[0] = distance(cum.begin(), lower_bound(cum.begin(), cum.end(), low_bound));
+        in[1] = distance(cum.begin(), lower_bound(cum.begin(), cum.end(), upp_bound));
+
+    }
+
+    // Stretching
+    float scale = float(out[1] - out[0]) / float(in[1] - in[0]);
+    for (int r = 0; r < dst.rows; ++r)
+    {
+        for (int c = 0; c < dst.cols; ++c)
+        {
+            int vs = max(src(r, c) - in[0], 0);
+            int vd = min(int(vs * scale + 0.5f) + out[0], out[1]);
+            dst(r, c) = saturate_cast<uchar>(vd);
+        }
+    }
+}
+*/
