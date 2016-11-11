@@ -1,6 +1,7 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <iostream>
+#include <fstream>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <vector>
@@ -11,43 +12,32 @@ using namespace cv;
 using namespace std;
 using namespace Eigen;
 
-//! similar to matlab function A = spdiags(B,d,m,n)
-//! spdiags(B,d,m,n) creates an m-by-n sparse matrix by taking the 
-//! columns of B and placing them along the diagonals specified by d.
-template <class numeric_t> 
-SparseMatrix<numeric_t> spdiags(const Matrix<numeric_t,-1,-1> &B, const VectorXi &d, const int m, const int n) 
-{					
-	typedef Triplet<numeric_t> triplet_t;
-	std::vector<triplet_t> triplets;
-	triplets.reserve(std::min(m,n)*d.size());
-	for (int k = 0; k < d.size(); ++k) 
+SparseMatrix<double> spdiags(const MatrixXd& B, const VectorXd& d, int m, int n)
+{
+	SparseMatrix<double> A(m,n);
+	typedef Triplet<double> T;
+    vector<T> triplets;
+    triplets.reserve(std::min(m,n)*d.size());
+    int l=0;
+    for (int k = 0; k < d.size(); k++) 
 	{
-		int diag = d(k);	// get diagonal
-		int i_start = std::max(-diag, 0); // get row of 1st element
-		int i_end = std::min(m, m-diag-(m-n)); // get row of last element
-		int j = -std::min(0, -diag); // get col of 1st element
-		int B_i; // start index i in matrix B
-		if(m < n)
-			B_i = std::max(-diag,0); // m < n
-		else
-			B_i = std::max(0,diag); // m >= n
-
-		for(int i = i_start; i < i_end; ++i, ++j, ++B_i)
-		{
-			triplets.push_back( {i, j,  B(B_i,k)} );
-		}
-	}
-	SparseMatrix<numeric_t> A(m,n);
-	A.setFromTriplets(triplets.begin(), triplets.end());
-	return A;
-}
-
+       int i_min = std::max(double(0), -1*d(k));
+       int i_max = std::min(double((m - 1)), (n - d(k) - 1));
+       int B_idx_start = m >= n ? d(k) : 0; 
+       for (int i = i_min; i <= i_max; i++) 
+	   { 
+        triplets.push_back( T(i, i+k, B(B_idx_start + i, k)) );
+       }
+     }
+     A.setFromTriplets(triplets.begin(), triplets.end());
+    return A;
+   }
 
 Mat boxfilter(Mat imSrc, int r)
 {
 	int hei=imSrc.rows; //i
 	int wid=imSrc.cols; //j
-	imSrc.convertTo(imSrc, CV_64FC1);
+	//imSrc.convertTo(imSrc, CV_64FC1);
 	Mat imDst=Mat::zeros(imSrc.size(),imSrc.type());
 	
 	//cumulative sum over Y axis
@@ -144,6 +134,7 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 	int w=I.cols;
 	int c =I.channels();
 	int wr;
+	double temp;
 	Mat meanI_r, meanI_g, meanI_b, chan1box, chan2box, chan3box;
 	Mat rr, rg, rb, gg, gb, bb, RR, RG, RB, GG, GB, BB, varI_rr, varI_rg, varI_rb, varI_gg, varI_gb, varI_bb, A1, A2;	
 	
@@ -158,6 +149,9 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 	ch2 = channel[1];  //Green channel
 	ch3 = channel[2];  //Red channel
 
+	//meanI_r = boxfilter(I(:, :, 1), r) ./ N;
+	//meanI_g = boxfilter(I(:, :, 2), r) ./ N;
+	//meanI_b = boxfilter(I(:, :, 3), r) ./ N;
     chan1box = boxfilter(ch3, r);
 	divide(chan1box, N, meanI_r, 1, -1);
 	chan2box = boxfilter(ch2, r);
@@ -166,11 +160,11 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 	divide(chan3box, N, meanI_b, 1, -1);
 
 	//Variance of I in each local patch
-	//		rr, rg, rb
-	//		rg, gg, gb
-	//		rb, gb, bb
+	//		  rr, rg, rb
+	//Sigma = rg, gg, gb
+	//		  rb, gb, bb
 	
-	multiply(ch3, ch3, rr);
+	multiply(ch3, ch3, rr);	
 	RR = boxfilter(rr, r);
 	multiply(ch3, ch2, rg);
 	RG = boxfilter(rg, r);	
@@ -184,27 +178,27 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 	BB = boxfilter(bb, r);
 
 	divide(RR, N, A1, 1, -1);
-	subtract(meanI_r, meanI_r, A2);
+	multiply(meanI_r, meanI_r, A2);
 	subtract(A1, A2, varI_rr);
 
 	divide(RG, N, A1, 1, -1);
-	subtract(meanI_r, meanI_g, A2);
+	multiply(meanI_r, meanI_g, A2);
 	subtract(A1, A2, varI_rg);
 
 	divide(RB, N, A1, 1, -1);
-	subtract(meanI_r, meanI_b, A2);
+	multiply(meanI_r, meanI_b, A2);
 	subtract(A1, A2, varI_rb);
 
 	divide(GG, N, A1, 1);
-	subtract(meanI_g, meanI_g, A2);
+	multiply(meanI_g, meanI_g, A2);
 	subtract(A1, A2, varI_gg);
 
 	divide(GB, N, A1, 1, -1);
-	subtract(meanI_g, meanI_b, A2);
+	multiply(meanI_g, meanI_b, A2);
 	subtract(A1, A2, varI_gb);
 
 	divide(BB, N, A1, 1, -1);
-	subtract(meanI_b, meanI_b, A2);
+	multiply(meanI_b, meanI_b, A2);
 	subtract(A1, A2, varI_bb);
 
 	
@@ -217,74 +211,81 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 	Mat Ident = Mat::ones((I.rows-2*r), (I.cols-2*r), CV_64FC1);
 	Mat temp_cc;
 	subtract(Ident, cc_t, temp_cc);	
-	double s = sum(temp_cc )[0];
+	double s = sum(temp_cc)[0];
 	tlen = s * wr * wr;
 
 	//M_idx = reshape([1:h*w], h, w)
-	Mat M_idx = Mat::zeros(1, h*w, CV_64FC1);
+	Mat M_idx = Mat::zeros(h, w, CV_64FC1);
 	int count =1;
-	for (int g=0; g<M_idx.cols; g++)
-	{
-		M_idx.at<double>(0,g) = count;
-		count= count+1;
-	}
+	for (int gc=0; gc<M_idx.cols; gc++)
+		for (int gr=0; gr<M_idx.rows; gr++)
+		{
+			M_idx.at<double>(gr,gc) = count;
+			count= count+1;
+		}
 	 M_idx = M_idx.reshape(1, h);
-
+	
+	//vals=zeros(tlen,1);
 	Mat vals = Mat::zeros(tlen,1,CV_64FC1);
 	int len = 0;
+
 	Mat sigma, meanI;
 	Mat Identity = Mat::eye(3, 3, CV_64FC1);
 	int i =0; int j =0; 
 	int u, v, p, q;
-	Mat winI = Mat::zeros(c, c, CV_64FC3);
-	Mat Ident2 = Mat::eye(9, 9, CV_64FC1);
+	Mat Ident2 = Mat::ones(9, 9, CV_64FC1);
     Mat invsigma(3, 3, CV_64FC1);
-	Mat row_idx = Mat::zeros(tlen,1, CV_64FC1);
-	Mat  trans_t= Mat::zeros(wr, wr, CV_64FC1);	
+	Mat row_idx = Mat::zeros(tlen,1, CV_64FC1);	
 	Mat col_idx = Mat::zeros(tlen, 1, CV_64FC1);
 	
 
-	for (i=1+r; i<=h-r; i++)	
+	for (i=0+r; i<h-r; i++)	
 	{
-		for (j=1+r; j<=w-r; j++)
+		for (j=0+r; j<w-r; j++)
 		{
-			
-			sigma = (Mat_<double>(3,3) << varI_rr.at<double>(i,j), varI_rg.at<double>(i,j), varI_rb.at<double>(i,j), varI_rg.at<double>(i,j), varI_gg.at<double>(i,j), varI_gb.at<double>(i,j), varI_rb.at<double>(i,j), varI_gb.at<double>(i,j), varI_bb.at<double>(i,j));
+			sigma = (Mat_<double>(3,3) << varI_rr.at<double>(i,j), varI_rg.at<double>(i,j), varI_rb.at<double>(i,j), varI_rg.at<double>(i,j), varI_gg.at<double>(i,j), varI_gb.at<double>(i,j), varI_rb.at<double>(i,j), varI_gb.at<double>(i,j), varI_bb.at<double>(i,j));			
 			meanI = (Mat_<double>(1,3) << meanI_r.at<double>(i,j), meanI_g.at<double>(i,j), meanI_b.at<double>(i,j));
+			//Sigma = Sigma + eps * eye(3);
 			scaleAdd(Identity, eps, sigma, sigma);
 			
 			//win_idx = M_idx(y-r:y+r,x-r:x+r);
 			Mat win_idx = Mat::zeros(3,3, CV_64FC1);
-			
+						
 			//int u, v, p, q;
-			for (u=0, p=i-r; p<(i+r); u++, p++)
+			for (u=0, p=i-r; p<=(i+r); u++, p++)
 			{
-				for (v=0, q=j-r; q<(j+r); v++, q++)
+				for (v=0, q=j-r; q<=(j+r); v++, q++)
 				{
 					win_idx.at<double>(u,v) = M_idx.at<double>(p,q);
 				}			
 			}
-		
+
 			//win_idx=win_idx(:);
+			win_idx = win_idx.t();
 			win_idx = win_idx.reshape(1, win_idx.rows*win_idx.cols);
-			
-			//Mat winI = Mat::zeros(c, c, CV_64FC3);
+			Mat winI = Mat::zeros(c, c, CV_64FC3);
 			
 			//winI=I(y-r:y+r,x-r:x+r,:);
-			for (u=0, p=i-r; p<(i+r); u++, p++)
+			for (u=0, p=i-r; p<=(i+r); u++, p++)
 			{
-				for (v=0, q=j-r; q<(j+r); v++, q++)
+				for (v=0, q=j-r; q<=(j+r); v++, q++)
 				{
-					winI.at<double>(u,v) = I.at<double>(p,q);					
+					winI.at<Vec3d>(u,v) = I.at<Vec3d>(p,q);						
 				}		
 			}	
-			
+			winI = winI.t();
+
 			//winI=reshape(winI,wr,c);
 			winI = winI.reshape(1, wr);
+			for(u =0; u<winI.rows; u++)
+			{
+				temp = winI.at<double>(u,0);
+				winI.at<double>(u,0) = winI.at<double>(u,2);
+				winI.at<double>(u,2) =temp;
+			}
 
 			//winI=winI-meanI(ones(wr,1),:);			
-			Mat meani = Mat::ones(wr, meanI.cols, CV_64FC1);
-			
+			Mat meani = Mat::ones(wr, meanI.cols, CV_64FC1);			
 			for( v=0; v<meani.cols; v++)
 			{
 				for( u=0; u<meani.rows; u++)
@@ -292,43 +293,36 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 					meani.at<double>(u,v) = meanI.at<double>(0,v);
 				}
 			}
-			subtract(winI, meani, winI);
-			
+			subtract(winI, meani, winI);	
+
 			//tvals=(1+winI*inv(Sigma)*winI')/wr;
 			Mat tvals = Mat::zeros(winI.size(), CV_64FC1);
-			//Mat Ident2 = Mat::eye(9, 9, CV_64FC1);
-			//Mat invsigma(3, 3, CV_64FC1);
 			sigma.convertTo(sigma, CV_64FC1);
 			winI.convertTo(winI, CV_64FC1);
 			invert(sigma, invsigma, DECOMP_SVD);
+			Mat temp2 = winI*invsigma*winI.t();
 			tvals=(Ident2+winI*invsigma*winI.t())/wr;
 					
 			//row_idx(1+len:wr^2+len)=reshape(win_idx(:,ones(wr,1)),wr^2,1);
-			Mat  win_idxt= Mat::zeros(wr, wr, CV_64FC1);
-			
+			Mat  win_idxt= Mat::zeros(wr, wr, CV_64FC1);			
 			for( v=0; v<win_idxt.cols; v++)
 			{
 				for( u=0; u<win_idxt.rows; u++)
 				{
 					win_idxt.at<double>(v,u) = win_idx.at<double>(v,0);
 				}
-			}
-	
+			}	
 			win_idxt = win_idxt.reshape(1, wr*wr);
 			
-			//Mat row_idx = Mat::zeros(tlen,1, CV_64FC1);
-
 			for (v=0+len, u=0; v < wr*wr+len; v++, u++)
 			{
 				row_idx.at<double>(v,0) = win_idxt.at<double>(u,0);
 			}
-
 			//t = win_idx';
-			Mat trans = win_idx.t();
-			
-			
+			Mat trans = win_idx.t();		
+			Mat  trans_t= Mat::zeros(wr, wr, CV_64FC1);	
+
 			//col_idx(1+len:wr^2+len)=reshape(t(ones(wr,1),:),wr^2,1);
-			//Mat  trans_t= Mat::zeros(wr, wr, CV_64FC1);			
 			for( v=0; v<trans_t.cols; v++)
 			{
 				for( u=0; u<trans_t.rows; u++)
@@ -337,9 +331,6 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 				}
 			}
 			trans_t = trans_t.reshape(1, wr*wr);
-
-			//Mat col_idx = Mat::zeros(tlen, 1, CV_64FC1);
-
 			for (v=0+len, u=0; v < wr*wr+len; v++, u++)
 			{
 				col_idx.at<double>(v,0) = trans_t.at<double>(u,0);
@@ -350,21 +341,13 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 			for (p=(0+len),q=0; q<tvals.rows; p++,q++)
 			{
 				vals.at<double>(p,0) = tvals.at<double>(q,0);
-			}
-		
+			}	
 			//len=len+wr^2;
-			len = len + (wr * wr);	
-
-		}
+			len = len + (wr * wr);			
+		}		
 	}
 
-	//vals=vals(1:len);
-	//row_idx=row_idx(1:len);
-	//col_idx=col_idx(1:len);
 	vals = vals.t();
-	cout<<"vals size:"<<vals.size()<<endl;
-	cout<<"row_idx size:"<<row_idx.size()<<endl;
-	cout<<"col_idx size:"<<col_idx.size()<<endl;
 
 	//L=sparse(row_idx,col_idx,vals,h*w,h*w);
 	//Create a vector of triplets
@@ -375,22 +358,53 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 	{
 		trp.push_back(Trip(row_idx.at<double>(vectorsize,0),col_idx.at<double>(vectorsize,0),vals.at<double>(0,vectorsize)));
 	}
-
 	//Assign them to the sparse Eigen matrix
-	cout<<h*w<<endl;
-	SparseMatrix<double> L(h*w,h*w);
+	SparseMatrix<double> L(h*w+1, h*w+1);
 	L.setFromTriplets(trp.begin(), trp.end());
-	//cout<<"L"<<L;
-
-	//sumL=sum(L,2);
-
-	//L=spdiags(sumL(:),0,h*w,h*w)-L;
-
-	cout<<"L rows:"<<L.rows()<<"L cols:"<<L.cols()<<endl;
 	
-	return L;	
+	//sumL=sum(L,2);
+	//MatrixXd sumL(h*w+1,1);
+	//SparseMatrix<double> sumL(h*w+1, 1);
+	//int j =0;double sumlap;
+	/*
+	for (int ki=0; ki < L.outerSize(); ++ki)
+	{
+		for (int vectorsize = 0; vectorsize < row_idx.rows; vectorsize++)
+		{
+			for (SparseMatrix<double>::InnerIterator it(L,ki); it; ++it)
+			{
+				//cout << it.row() << "\t"; // row index
+				//cout << it.col() << "\t"; // col index (here it is equal to k)
+				//cout << it.value() << endl;
+				if(it.row() == j)
+				{
+					sumlap = sumlap + it.value();
+				}
+				trp.push_back(Trip(ki,0,sumlap));
+			}
+		j = j+1;
+	 }
+	}
+	sumL.setFromTriplets(trp.begin(), trp.end());
+	*/
+	MatrixXd sumL;
+	sumL = MatrixXd(L)
+	sumL = L.colwise().sum();
+	for (int ki=0; ki < L.outerSize(); ++ki)
+	{
+		for (SparseMatrix<double>::InnerIterator it(L,ki); it; ++it)
+		{
+			cout << it.row() << "\t"; // row index
+			cout << it.col() << "\t"; // col index (here it is equal to k)
+			cout << it.value() << endl;
+		}
+	}
+	
+	//L=spdiags(sumL(:),0,h*w,h*w)-L;
+	VectorXd d(1);d<<0;
+	L = spdiags(sumL, d, h*w, h*w) - L;	
+	return L;
 }
-
 
 int main( int argc, const char** argv )
 {
@@ -402,13 +416,16 @@ int main( int argc, const char** argv )
         cout <<  "Could not open or find the image" << endl ;
         return -1;
     }
+	
 	sparseDmap = imread("3_sparse_depth.png", CV_LOAD_IMAGE_UNCHANGED); // Read sparse map
 	if(! sparseDmap.data )                              // Check for invalid input
     {
         cout <<  "Could not open or find the image" << endl ;
         return -1;
     }
-	image.convertTo(image, CV_64FC3);
+
+	image.convertTo(image, CV_64FC3, 1.0/255.0);
+	//cout<<"image:"<<image.at<Vec3d>(0,0)<<endl;
 	sparseDmap.convertTo(sparseDmap, CV_64FC1);
 	double theta = 0.0001f;
 
@@ -428,10 +445,6 @@ int main( int argc, const char** argv )
 			}
 		}
 	}
-	//L=getLaplacian(I,1);
-	//const int dims = 2;
-	//int size[] = {image.rows*image.cols, image.rows*image.cols};
-	//SparseMat Laplace(dims, size, CV_64F);
 	SparseMatrix<double>Laplace = getLaplacian(image, r);
 
 	//make a sparse diagonal matrix necessary for matting process
@@ -450,60 +463,3 @@ int main( int argc, const char** argv )
     waitKey(0);                                          // Wait for a keystroke in the window
     return 0;
 }
-
-
-
-
-/*
-void imadjust(const Mat1b& src, Mat1b& dst, int tol = 1, Vec2i in = Vec2i(0, 255), Vec2i out = Vec2i(0, 255))
-{
-    // src : input CV_8UC1 image
-    // dst : output CV_8UC1 imge
-    // tol : tolerance, from 0 to 100.
-    // in  : src image bounds
-    // out : dst image buonds
-
-    dst = src.clone();
-
-    tol = max(0, min(100, tol));
-
-    if (tol > 0)
-    {
-        // Compute in and out limits
-
-        // Histogram
-        vector<int> hist(256, 0);
-        for (int r = 0; r < src.rows; ++r) {
-            for (int c = 0; c < src.cols; ++c) {
-                hist[src(r,c)]++;
-            }
-        }
-
-        // Cumulative histogram
-        vector<int> cum = hist;
-        for (int i = 1; i < hist.size(); ++i) {
-            cum[i] = cum[i - 1] + hist[i];
-        }
-
-        // Compute bounds
-        int total = src.rows * src.cols;
-        int low_bound = total * tol / 100;
-        int upp_bound = total * (100-tol) / 100;
-        in[0] = distance(cum.begin(), lower_bound(cum.begin(), cum.end(), low_bound));
-        in[1] = distance(cum.begin(), lower_bound(cum.begin(), cum.end(), upp_bound));
-
-    }
-
-    // Stretching
-    float scale = float(out[1] - out[0]) / float(in[1] - in[0]);
-    for (int r = 0; r < dst.rows; ++r)
-    {
-        for (int c = 0; c < dst.cols; ++c)
-        {
-            int vs = max(src(r, c) - in[0], 0);
-            int vd = min(int(vs * scale + 0.5f) + out[0], out[1]);
-            dst(r, c) = saturate_cast<uchar>(vd);
-        }
-    }
-}
-*/
