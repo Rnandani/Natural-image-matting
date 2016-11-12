@@ -7,6 +7,9 @@
 #include <vector>
 #include <algorithm>
 #include <opencv2/core/eigen.hpp>
+#include <time.h>
+#include<Eigen/SparseLU>
+#include<Eigen/IterativeLinearSolvers>
 
 using namespace cv;
 using namespace std;
@@ -127,8 +130,7 @@ Mat boxfilter(Mat imSrc, int r)
 
 
 SparseMatrix<double> getLaplacian(Mat I, int r)
-{
-	
+{	
 	double eps = 0.0000001f;
 	int h=I.rows;
 	int w=I.cols;
@@ -363,53 +365,24 @@ SparseMatrix<double> getLaplacian(Mat I, int r)
 	L.setFromTriplets(trp.begin(), trp.end());
 	
 	//sumL=sum(L,2);
-	//MatrixXd sumL(h*w+1,1);
-	//SparseMatrix<double> sumL(h*w+1, 1);
-	//int j =0;double sumlap;
-	/*
-	for (int ki=0; ki < L.outerSize(); ++ki)
-	{
-		for (int vectorsize = 0; vectorsize < row_idx.rows; vectorsize++)
-		{
-			for (SparseMatrix<double>::InnerIterator it(L,ki); it; ++it)
-			{
-				//cout << it.row() << "\t"; // row index
-				//cout << it.col() << "\t"; // col index (here it is equal to k)
-				//cout << it.value() << endl;
-				if(it.row() == j)
-				{
-					sumlap = sumlap + it.value();
-				}
-				trp.push_back(Trip(ki,0,sumlap));
-			}
-		j = j+1;
-	 }
-	}
-	sumL.setFromTriplets(trp.begin(), trp.end());
-	*/
-	MatrixXd sumL;
-	sumL = MatrixXd(L)
-	sumL = L.colwise().sum();
-	for (int ki=0; ki < L.outerSize(); ++ki)
-	{
-		for (SparseMatrix<double>::InnerIterator it(L,ki); it; ++it)
-		{
-			cout << it.row() << "\t"; // row index
-			cout << it.col() << "\t"; // col index (here it is equal to k)
-			cout << it.value() << endl;
-		}
-	}
-	
+	SparseMatrix<double> sumL(h*w+1,1);
+	sumL = L * VectorXd::Ones(L.cols());
+
 	//L=spdiags(sumL(:),0,h*w,h*w)-L;
 	VectorXd d(1);d<<0;
-	L = spdiags(sumL, d, h*w, h*w) - L;	
-	return L;
+	SparseMatrix<double> Lap(h*w+1, h*w+1);
+	SparseMatrix<double> Lf(h*w+1, h*w+1);
+	Lap = spdiags(sumL, d, h*w+1, h*w+1);
+	Lf = Lap - L;
+	return Lf;
 }
 
 int main( int argc, const char** argv )
 {
     Mat image, sparseDmap, outputbox;
 	int r = 1;
+	clock_t t1,t2;
+	t1=clock();
 	image = imread("3.png", CV_LOAD_IMAGE_UNCHANGED);   // Read original image	
     if(! image.data )                              // Check for invalid input
     {
@@ -424,42 +397,78 @@ int main( int argc, const char** argv )
         return -1;
     }
 
+	int h=image.rows;
+	int w=image.cols;
+	int c =image.channels();
+
 	image.convertTo(image, CV_64FC3, 1.0/255.0);
 	//cout<<"image:"<<image.at<Vec3d>(0,0)<<endl;
-	sparseDmap.convertTo(sparseDmap, CV_64FC1);
+	sparseDmap.convertTo(sparseDmap, CV_64FC1,1.0/255.0);
 	double theta = 0.0001f;
+	double lambda = 1.0000e-03f;
 
 	//constsMap=sparseDMap>0.0001;
-	Mat  constsMap= Mat::zeros(sparseDmap.rows, sparseDmap.cols, CV_64FC1);
+	MatrixXd constsMap(h, w);
 	for( int i=0; i<sparseDmap.rows; i++)
 	{
 		for(int j=0; j<sparseDmap.cols; j++)
 		{
 			if(sparseDmap.at<double>(i,j) > theta)
 			{
-				constsMap.at<double>(i,j) =1;
+				constsMap(i,j) = 1.0;				
 			}
 			else
 			{
-				constsMap.at<double>(i,j) =0;
+				constsMap(i,j) = 0.0;
 			}
 		}
 	}
-	SparseMatrix<double>Laplace = getLaplacian(image, r);
+
+	MatrixXd sparseDM(h, w);
+	for( int i=0; i<sparseDmap.rows; i++)
+	{
+		for(int j=0; j<sparseDmap.cols; j++)
+		{
+			sparseDM(i,j) = sparseDmap.at<double>(i,j);
+		}
+	}
+
+	//L=getLaplacian(I,1); 
+	SparseMatrix<double> Laplace(h*w+1, h*w+1);
+	Laplace = getLaplacian(image, r);
 
 	//make a sparse diagonal matrix necessary for matting process
-	//D=spdiags(constsMap(:),0,sizeI,sizeI); 
-	//constsMap = constsMap.reshape(1, 1);
+	//D=spdiags(constsMap(:),0,sizeI,sizeI);
+	VectorXd d(1);d<<0;
+	Map<MatrixXd> M1(constsMap.data(), h*w+1,1);
+	SparseMatrix<double> D(h*w+1, h*w+1);
+	D = spdiags(M1, d, h*w+1, h*w+1);
 
-	//Mat A = spdiags(constsMap, 0,image.rows*image.cols, image.rows*image.cols); 
-
-	//x=(L+lambda*D)\(lambda*D*sparseDMap(:)); 
+	//x=(L+lambda*D)\(lambda*D*sparseDMap(:));
+	//x = A\B where A is L+lambda*D and B is (lambda*D*sparseDMap(:))
+	VectorXd x;
+	SparseMatrix<double> A(h*w+1, h*w+1);
+	VectorXd B(h*w+1, 1);
+	Map<MatrixXd> M2( sparseDM.data(), h*w+1,1);
+	A = Laplace + lambda*D;
+	B = lambda*(D*M2);
+	BiCGSTAB<SparseMatrix<double> >  BCGST;
+	BCGST.compute(A);
+	x = BCGST.solve(B);
+	Map<MatrixXd> fullDmap(x.data(), w, h);
+	Mat fullDMapCV(fullDmap.rows(), fullDmap.cols(), CV_64FC1, fullDmap.data());
 	//fullDMap=reshape(x,h,w);
 	//f_d=imadjust(fullDMap);
-
+	
+	imwrite( "result1.jpg", fullDMapCV);
     namedWindow( "Display window", WINDOW_AUTOSIZE );// Create a window for display.
     imshow( "Display window", image );                   // Show our image inside it.
-
+	namedWindow( "Display", WINDOW_AUTOSIZE );// Create a window for display.
+    imshow( "Display", fullDMapCV );                   // Show our image inside it.
+	t2=clock();
+	float diff ((float)t2-(float)t1);
+    cout<<diff<<endl;
+    system ("pause");
     waitKey(0);                                          // Wait for a keystroke in the window
     return 0;
 }
