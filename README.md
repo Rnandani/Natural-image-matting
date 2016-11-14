@@ -1,2 +1,3 @@
 # Natural-image-matting
-Work is in progess and yet not complete. 
+This C++ code computes the matting laplacian adapted from Levin's code for the following paper 'A Closed-Form Solution to Natural Image Matting'
+
