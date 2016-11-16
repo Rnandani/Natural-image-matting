@@ -1,5 +1,6 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
+#include "opencv2/opencv.hpp"
 #include <iostream>
 #include <fstream>
 #include <Eigen/Dense>
@@ -14,6 +15,24 @@
 using namespace cv;
 using namespace std;
 using namespace Eigen;
+
+void writeMatToFile(cv::Mat& m, const char* filename)
+{
+    ofstream fout(filename);
+    if(!fout)
+    {
+        cout<<"File Not Opened"<<endl;  return;
+    }
+    for(int i=0; i<m.rows; i++)
+    {
+        for(int j=0; j<m.cols; j++)
+        {
+            fout<<m.at<double>(i,j)<<"\t";
+        }
+        fout<<endl;
+    }
+    fout.close();
+}
 
 SparseMatrix<double> spdiags(const MatrixXd& B, const VectorXd& d, int m, int n)
 {
@@ -452,11 +471,13 @@ int main( int argc, const char** argv )
 	Map<MatrixXd> M2( sparseDM.data(), h*w+1,1);
 	A = Laplace + lambda*D;
 	B = lambda*(D*M2);
-	BiCGSTAB<SparseMatrix<double> >  BCGST;
+	BiCGSTAB<SparseMatrix<double>, Eigen::IncompleteLUT<double> >  BCGST;
+	BCGST.preconditioner().setDroptol(.001);
 	BCGST.compute(A);
 	x = BCGST.solve(B);
 	Map<MatrixXd> fullDmap(x.data(), w, h);
 	Mat fullDMapCV(fullDmap.rows(), fullDmap.cols(), CV_64FC1, fullDmap.data());
+	fullDMapCV = fullDMapCV.t();
 	//fullDMap=reshape(x,h,w);
 	//f_d=imadjust(fullDMap);
 	
